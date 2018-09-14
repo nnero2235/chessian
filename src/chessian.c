@@ -43,24 +43,17 @@ void chessian_resetCHBuffer(struct CHBuffer *buffer){
 
 size_t chessian_writeString(struct CHBuffer *buffer,char* str_v){
     if(buffer == NULL){
-        E_LOG("buffer is NULL");
         return -1;
     }
     size_t len = strlen(str_v) + 3;
     expandCHBuffer(buffer,len);
+
     
-    buffer->buffer[buffer->offset++] = 'C';
-    buffer->buffer[buffer->offset++] = ' ';
-    unsigned char* buffer_ref = &buffer->buffer[buffer->offset];
-    memcpy(buffer_ref,str_v,len-3);
-    buffer->offset += len -3;
-    buffer->buffer[buffer->offset++] = '\n';
     return len;
 }
 
 size_t chessian_writeInt(struct CHBuffer *buffer,int int_v){
     if(buffer == NULL){
-        E_LOG("buffer is NULL");
         return -1;
     }
     //compact: -16~47 can encode in 0x80 ~ 0xbf
@@ -99,5 +92,80 @@ size_t chessian_writeInt(struct CHBuffer *buffer,int int_v){
     buffer->buffer[buffer->offset++] = int_v >> 8;
     buffer->buffer[buffer->offset++] = int_v;
     return 5;
+}
+
+size_t chessian_writeLong(struct CHBuffer* buffer,long long_v){
+    if(buffer == NULL){
+        return -1;
+    }
+
+    if(long_v >= -8 && long_v <= 15){
+        expandCHBuffer(buffer,1);
+        buffer->buffer[buffer->offset++] = long_v + 0xe0;
+        return 1;
+    }
+
+    if(long_v >= -2048 && long_v <= 2047){
+        expandCHBuffer(buffer,2);
+        buffer->buffer[buffer->offset++] = (long_v >> 8) + 0xf8;
+        buffer->buffer[buffer->offset++] = long_v;
+        return 2;
+    }
+
+    if(long_v >= -262144 && long_v <= 262143){
+        expandCHBuffer(buffer,3);
+        buffer->buffer[buffer->offset++] = (long_v >> 16) + 0x3c;
+        buffer->buffer[buffer->offset++] = long_v >> 8;
+        buffer->buffer[buffer->offset++] = long_v;
+        return 3;
+    }
+
+    if(long_v >= -2147483647 && long_v <= 2147483647){
+        expandCHBuffer(buffer,5);
+        buffer->buffer[buffer->offset++] = 0x4c;
+        buffer->buffer[buffer->offset++] = long_v >> 24;
+        buffer->buffer[buffer->offset++] = long_v >> 16;
+        buffer->buffer[buffer->offset++] = long_v >> 8;
+        buffer->buffer[buffer->offset++] = long_v;
+        return 5;
+    }
+
+    expandCHBuffer(buffer,9);
+    buffer->buffer[buffer->offset++] = 'L';
+    buffer->buffer[buffer->offset++] = long_v >> 56;
+    buffer->buffer[buffer->offset++] = long_v >> 48;
+    buffer->buffer[buffer->offset++] = long_v >> 40;
+    buffer->buffer[buffer->offset++] = long_v >> 32;
+    buffer->buffer[buffer->offset++] = long_v >> 24;
+    buffer->buffer[buffer->offset++] = long_v >> 16;
+    buffer->buffer[buffer->offset++] = long_v >> 8;
+    buffer->buffer[buffer->offset++] = long_v;
+    return 9;
+}
+
+//bytes_len must be less then 0xffff
+//if length over 0xffff, high level should part them
+size_t chessian_writeBytes(struct CHBuffer *buffer,unsigned char *bytes,size_t bytes_len,int final){
+    if(buffer == NULL || bytes == NULL || bytes_len == 0){
+        return -1;
+    }
+    if(bytes_len > 0xffff){
+        return -2;
+    }
+
+    if(bytes_len == 1 && bytes[0] <= 15){
+        expandCHBuffer(buffer,1);
+        buffer->buffer[buffer->offset++] = bytes[0] + 0x20;
+        return 1;
+    }
+
+    unsigned char leading_c = final ? 'B' : 'b';
+    expandCHBuffer(buffer,bytes_len+3);
+    buffer->buffer[buffer->offset++] = leading_c;
+    buffer->buffer[buffer->offset++] = bytes_len >> 8;
+    buffer->buffer[buffer->offset++] = bytes_len;
+    unsigned char* buffer_ref = &buffer->buffer[buffer->offset];
+    memcpy(buffer_ref,bytes,bytes_len);
+    return bytes_len+3;
 }
 

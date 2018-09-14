@@ -19,4 +19,6 @@ size_t chessian_writeString(struct CHBuffer *buffer,char* str_v);
 
 size_t chessian_writeInt(struct CHBuffer *buffer,int int_v);
 
+size_t chessian_writeLong(struct CHBuffer *buffer,long long_v);
+
 #endif
