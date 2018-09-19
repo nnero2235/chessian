@@ -4,6 +4,12 @@
 #include<stdlib.h>
 #include"util.h"
 
+//help double convert
+union DoubleConverter{
+    double d;
+    char c[8];
+};
+
 //expand buffer when size is not enough
 //do nothing when size is enough
 static void expandCHBuffer(struct CHBuffer* buffer,size_t need_size){
@@ -11,7 +17,7 @@ static void expandCHBuffer(struct CHBuffer* buffer,size_t need_size){
     if(avail < need_size){ //expand char[]
         unsigned char *old = buffer->buffer;
         size_t new_size = need_size-avail+buffer->buffer_len;
-        I_LOG("buffer expand from:%d -> to:%d",buffer->buffer_len,new_size);
+        D_LOG("buffer expand from:%d -> to:%d",buffer->buffer_len,new_size);
         unsigned char *new = realloc(old,sizeof(unsigned char) * new_size);
         buffer->buffer = new;
         buffer->buffer_len = new_size;
@@ -38,18 +44,123 @@ void chessian_resetCHBuffer(struct CHBuffer *buffer){
     if(buffer == NULL){
         return;
     }
-    memset(buffer,0,sizeof(struct CHBuffer));
+    buffer->offset = 0;
 }
 
-size_t chessian_writeString(struct CHBuffer *buffer,char* str_v){
+//bytes_len must be less then 0xffff
+//if length over 0xffff, high level should part them
+size_t chessian_writeBytes(struct CHBuffer *buffer,unsigned char *bytes,size_t bytes_len,int final){
+    if(buffer == NULL || bytes == NULL || bytes_len == 0){
+        return -1;
+    }
+    if(bytes_len > 0xffff){
+        return -2;
+    }
+
+    if(bytes_len == 1 && bytes[0] <= 15){
+        expandCHBuffer(buffer,1);
+        buffer->buffer[buffer->offset++] = bytes[0] + 0x20;
+        return 1;
+    }
+
+    unsigned char leading_c = final ? 'B' : 'b';
+    expandCHBuffer(buffer,bytes_len+3);
+    buffer->buffer[buffer->offset++] = leading_c;
+    buffer->buffer[buffer->offset++] = bytes_len >> 8;
+    buffer->buffer[buffer->offset++] = bytes_len;
+    unsigned char* buffer_ref = &buffer->buffer[buffer->offset];
+    memcpy(buffer_ref,bytes,bytes_len);
+    buffer->offset += bytes_len;
+    return bytes_len+3;
+}
+
+
+size_t chessian_writeBoolean(struct CHBuffer *buffer,int b_v){
     if(buffer == NULL){
         return -1;
     }
-    size_t len = strlen(str_v) + 3;
-    expandCHBuffer(buffer,len);
+    expandCHBuffer(buffer,1);
+    if(b_v){
+        buffer->buffer[buffer->offset++] = 'T';
+    } else {
+        buffer->buffer[buffer->offset++] = 'F';
+    }
+    return 1;
+}
 
+size_t chessian_writeDate(struct CHBuffer *buffer,long timestamp_v,int b_millis){
+    if(buffer == NULL){
+        return -1;
+    }
+    if(b_millis){
+        expandCHBuffer(buffer,9);
+        buffer->buffer[buffer->offset++] = 0x4a;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 56;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 48;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 40;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 32;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 24;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 16;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 8;
+        buffer->buffer[buffer->offset++] = timestamp_v;
+        return 9;
+    } else {
+        expandCHBuffer(buffer,5);
+        buffer->buffer[buffer->offset++] = 0x4b;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 24;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 16;
+        buffer->buffer[buffer->offset++] = timestamp_v >> 8;
+        buffer->buffer[buffer->offset++] = timestamp_v;
+        return 5;
+    }
+}
+
+size_t chessian_writeDouble(struct CHBuffer *buffer,double d_v){
+    if(buffer == NULL){
+        return -1;
+    }
+
+    if(d_v == 0.0d){
+        expandCHBuffer(buffer,1);
+        buffer->buffer[buffer->offset++] = 0x5b;
+        return 1;
+    }
+    if(d_v == 1.0d){
+        expandCHBuffer(buffer,1);
+        buffer->buffer[buffer->offset++] = 0x5c;
+        return 1;
+    }
     
-    return len;
+    int i_v = d_v;
+    if(i_v == d_v){ //means no fractional
+        if(i_v >= -128 && i_v <= 127){
+            expandCHBuffer(buffer,2);
+            buffer->buffer[buffer->offset++] = 0x5d;
+            buffer->buffer[buffer->offset++] = i_v;
+            return 2;
+        }
+        if(i_v >= -32768 && i_v <= 32767){
+            expandCHBuffer(buffer,3);
+            buffer->buffer[buffer->offset++] = 0x5e;
+            buffer->buffer[buffer->offset++] = i_v >> 8;
+            buffer->buffer[buffer->offset++] = i_v;
+            return 3;
+        }
+    }
+
+    union DoubleConverter converter;
+    converter.d = d_v;
+    expandCHBuffer(buffer,9);
+    buffer->buffer[buffer->offset++] = 'D';
+    buffer->buffer[buffer->offset++] = converter.c[7];
+    buffer->buffer[buffer->offset++] = converter.c[6];
+    buffer->buffer[buffer->offset++] = converter.c[5];
+    buffer->buffer[buffer->offset++] = converter.c[4];
+    buffer->buffer[buffer->offset++] = converter.c[3];
+    buffer->buffer[buffer->offset++] = converter.c[2];
+    buffer->buffer[buffer->offset++] = converter.c[1];
+    buffer->buffer[buffer->offset++] = converter.c[0];
+    return 9;
 }
 
 size_t chessian_writeInt(struct CHBuffer *buffer,int int_v){
@@ -143,29 +254,24 @@ size_t chessian_writeLong(struct CHBuffer* buffer,long long_v){
     return 9;
 }
 
-//bytes_len must be less then 0xffff
-//if length over 0xffff, high level should part them
-size_t chessian_writeBytes(struct CHBuffer *buffer,unsigned char *bytes,size_t bytes_len,int final){
-    if(buffer == NULL || bytes == NULL || bytes_len == 0){
+size_t chessian_writeNull(struct CHBuffer *buffer){
+    if(buffer == NULL){
         return -1;
     }
-    if(bytes_len > 0xffff){
-        return -2;
-    }
+    expandCHBuffer(buffer,1);
+    buffer->buffer[buffer->offset++] = 'N';
+    return 1;
+}
 
-    if(bytes_len == 1 && bytes[0] <= 15){
-        expandCHBuffer(buffer,1);
-        buffer->buffer[buffer->offset++] = bytes[0] + 0x20;
-        return 1;
+//TODO: not finished
+size_t chessian_writeString(struct CHBuffer *buffer,char* str_v){
+    if(buffer == NULL){
+        return -1;
     }
-
-    unsigned char leading_c = final ? 'B' : 'b';
-    expandCHBuffer(buffer,bytes_len+3);
-    buffer->buffer[buffer->offset++] = leading_c;
-    buffer->buffer[buffer->offset++] = bytes_len >> 8;
-    buffer->buffer[buffer->offset++] = bytes_len;
-    unsigned char* buffer_ref = &buffer->buffer[buffer->offset];
-    memcpy(buffer_ref,bytes,bytes_len);
-    return bytes_len+3;
+    size_t len = strlen(str_v) + 3;
+    expandCHBuffer(buffer,len);
+    
+    
+    return len;
 }
 
